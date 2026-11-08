@@ -7,6 +7,7 @@
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -16,13 +17,30 @@ import imageio_ffmpeg
 import yt_dlp
 
 APP_NAME = "YT Downloader"
-SETTINGS_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "YTDownloader")
+__version__ = "1.1.0"
+
+
+def _settings_dir():
+    home = os.path.expanduser("~")
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", home)
+    elif sys.platform == "darwin":
+        base = os.path.join(home, "Library", "Application Support")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(home, ".config")
+    return os.path.join(base, "YTDownloader")
+
+
+SETTINGS_DIR = _settings_dir()
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
 
 QUALITY_BEST = "Лучшее доступное"
 QUALITY_AUDIO = "Только аудио (MP3)"
 STANDARD_HEIGHTS = [2160, 1440, 1080, 720, 480, 360]
 BROWSERS = ["Нет", "firefox", "chrome", "edge", "opera", "brave", "vivaldi", "chromium"]
+if sys.platform == "darwin":
+    BROWSERS.insert(2, "safari")
+MONO_FONT = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform, "DejaVu Sans Mono")
 
 
 class Cancelled(Exception):
@@ -162,8 +180,10 @@ class App(tk.Tk):
     # ---------- UI ----------
     def _build_ui(self):
         style = ttk.Style(self)
-        if "vista" in style.theme_names():
-            style.theme_use("vista")
+        for theme in ("vista", "aqua", "clam"):
+            if theme in style.theme_names():
+                style.theme_use(theme)
+                break
         pad = {"padx": 8, "pady": 4}
 
         top = ttk.LabelFrame(self, text="Ссылка")
@@ -248,7 +268,7 @@ class App(tk.Tk):
 
         lf = ttk.LabelFrame(self, text="Журнал")
         lf.pack(fill="both", **pad)
-        self.log = tk.Text(lf, height=7, wrap="word", state="disabled", font=("Consolas", 9))
+        self.log = tk.Text(lf, height=7, wrap="word", state="disabled", font=(MONO_FONT, 9))
         self.log.pack(fill="both", expand=True, padx=6, pady=6)
 
     def _set_quality_options(self, heights):
@@ -473,7 +493,10 @@ class App(tk.Tk):
     def open_folder(self):
         folder = self.folder_var.get()
         if os.path.isdir(folder):
-            os.startfile(folder)
+            if sys.platform == "win32":
+                os.startfile(folder)
+            else:
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", folder])
 
     # ---------- события ----------
     def _poll_events(self):
@@ -565,7 +588,23 @@ class App(tk.Tk):
         self.destroy()
 
 
+def self_check(out_path=None):
+    """Проверка сборки без GUI: yt-dlp и встроенный ffmpeg на месте и запускаются."""
+    ff = ffmpeg_path()
+    ff_ver = subprocess.run([ff, "-version"], capture_output=True, text=True, check=True).stdout.splitlines()[0]
+    report = f"{APP_NAME} {__version__}\nyt-dlp {yt_dlp.version.__version__}\n{ff_ver}\n"
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(report)
+    else:
+        print(report, end="")
+
+
 def main():
+    if "--check" in sys.argv:
+        i = sys.argv.index("--check")
+        self_check(sys.argv[i + 1] if len(sys.argv) > i + 1 else None)
+        return
     if sys.platform == "win32":
         try:
             import ctypes

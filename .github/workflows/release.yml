@@ -1,0 +1,88 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: YTDownloader-windows.exe
+          - os: ubuntu-22.04
+            asset: YTDownloader-linux-x86_64.tar.gz
+          - os: macos-latest
+            asset: YTDownloader-macos-arm64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: build.bat
+
+      - name: Build (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: bash build.sh
+
+      - name: Self-check and package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process dist\YTDownloader.exe -ArgumentList "--check", "check.txt" -Wait
+          Get-Content check.txt
+          Copy-Item dist\YTDownloader.exe ${{ matrix.asset }}
+
+      - name: Self-check and package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./dist/YTDownloader --check
+          tar -czf ${{ matrix.asset }} -C dist YTDownloader
+
+      - name: Self-check and package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./dist/YTDownloader.app/Contents/MacOS/YTDownloader --check
+          ditto -c -k --keepParent dist/YTDownloader.app ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --title "YT Downloader ${GITHUB_REF_NAME#v}" \
+            --notes-file .github/release-notes.md
